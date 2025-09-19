@@ -4,8 +4,7 @@ import pandas as pd
 
 # --- Константы ---
 LIMIT_SNR_MONTH = 1_300_000       # месячный лимит для СНР (≈300 МРП)
-LIMIT_SNR_YEAR = 2_500_000_000    # годовой лимит для СНР (~2.5 млрд тг)
-
+LIMIT_SNR_YEAR = 2_500_000_000    # годовой лимит для СНР (~2,5 млрд тг)
 
 # --- Функции ---
 def calculate_taxes(entity, mode, income_year, salaries_year, expenses_year):
@@ -88,42 +87,47 @@ def main():
 
     period_choice = st.radio("За какой период введены данные?", ["В месяц", "В год"])
 
+    # --- Доступные режимы ---
+    available_modes = []
+    if entity == "individual":
+        if not has_employees:
+            available_modes.append(("СНР — Специальный налоговый режим (самозанятые, 4%)", "snr_individual"))
+    elif entity in ["ip", "too", "kh"]:
+        available_modes.append(("СНР — Специальный налоговый режим (упрощённый/розничный, 4%)", "snr_ip_too_kh"))
+        if entity == "ip":
+            available_modes.append(("Общий режим — ИП (налог на прибыль 10%)", "general_ip"))
+        elif entity == "too":
+            available_modes.append(("Общий режим — ТОО (КПН 20%)", "general_too"))
+
+    # фильтрация СНР по лимиту
+    if income * (12 if period_choice == "В месяц" else 1) > LIMIT_SNR_YEAR:
+        available_modes = [m for m in available_modes if not m[1].startswith("snr")]
+
+    if not available_modes:
+        st.error("⚠️ Для вашего типа и дохода нет доступных режимов.")
+        st.stop()  # прекращаем выполнение
+
+    # --- ВЫБОР РЕЖИМА (вне кнопки) ---
+    mode_desc = st.selectbox("Выберите налоговый режим:", [desc for desc, _ in available_modes])
+    mode_key = dict(available_modes)[mode_desc]
+
+    # --- Кнопка рассчитать ---
     if st.button("🔎 Рассчитать"):
         # --- Пересчёт в годовые значения ---
         if period_choice == "В месяц":
-            income *= 12
-            salaries *= 12
-            expenses *= 12
+            income_annual = income * 12
+            salaries_annual = salaries * 12
+            expenses_annual = expenses * 12
+        else:
+            income_annual = income
+            salaries_annual = salaries
+            expenses_annual = expenses
 
-        # --- Доступные режимы ---
-        available_modes = []
-        if entity == "individual":
-            if not has_employees:
-                available_modes.append(("СНР — Специальный налоговый режим (самозанятые, 4%)", "snr_individual"))
-        elif entity in ["ip", "too", "kh"]:
-            available_modes.append(("СНР — Специальный налоговый режим (упрощённый/розничный, 4%)", "snr_ip_too_kh"))
-            if entity == "ip":
-                available_modes.append(("Общий режим — ИП (налог на прибыль 10%)", "general_ip"))
-            elif entity == "too":
-                available_modes.append(("Общий режим — ТОО (КПН 20%)", "general_too"))
+        # --- Расчёт налогов ---
+        tax, after_tax_income, warnings = calculate_taxes(entity, mode_key, income_annual, salaries_annual, expenses_annual)
 
-        # фильтрация СНР по лимиту
-        if income > LIMIT_SNR_YEAR:
-            available_modes = [m for m in available_modes if not m[1].startswith("snr")]
-
-        if not available_modes:
-            st.error("⚠️ Для вашего типа и дохода нет доступных режимов.")
-            return
-
-        # выбор режима
-        mode_desc = st.selectbox("Выберите налоговый режим:", [desc for desc, _ in available_modes])
-        mode_key = dict(available_modes)[mode_desc]
-
-        # --- Расчёт ---
-        tax, after_tax_income, warnings = calculate_taxes(entity, mode_key, income, salaries, expenses)
-
+        # --- Вывод результата ---
         st.header("📌 Результат расчёта")
-
         col1, col2 = st.columns(2)
         col1.metric("Налог", f"{tax:,.2f} ₸")
         col2.metric("Доход после налогов", f"{after_tax_income:,.2f} ₸")
@@ -131,24 +135,18 @@ def main():
         for w in warnings:
             st.warning(w)
 
-        # --- Подсказки и сравнения ---
+        # --- Сравнение налогов по другим режимам ---
         if len(available_modes) > 1:
             st.subheader("💡 Сравнение налоговой нагрузки и чистого дохода")
-
             results = []
             for desc, alt_mode in available_modes:
-                alt_tax, alt_after, _ = calculate_taxes(entity, alt_mode, income, salaries, expenses)
+                alt_tax, alt_after, _ = calculate_taxes(entity, alt_mode, income_annual, salaries_annual, expenses_annual)
                 results.append({"Режим": desc, "Налог (₸)": alt_tax, "Чистый доход (₸)": alt_after})
-
             df = pd.DataFrame(results)
-
             st.markdown("**Сравнение налогов по режимам:**")
             st.bar_chart(df.set_index("Режим")["Налог (₸)"])
-
             st.markdown("**Сравнение чистого дохода по режимам:**")
             st.bar_chart(df.set_index("Режим")["Чистый доход (₸)"])
-
-            # текстовые подсказки
             for row in results:
                 if row["Режим"] != mode_desc and row["Налог (₸)"] < tax:
                     st.info(f"👉 По режиму «{row['Режим']}» налог был бы меньше: **{row['Налог (₸)']:,.2f} ₸**")
@@ -158,3 +156,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
